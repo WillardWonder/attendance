@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc, where, deleteDoc } from 'firebase/firestore';
-import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard, Trash2, AlertTriangle } from 'lucide-react';
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc, where, deleteDoc, limit } from 'firebase/firestore';
+import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard, Trash2, AlertTriangle, Lock, Unlock, History, BarChart3, XCircle } from 'lucide-react';
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -73,11 +73,16 @@ const App = () => {
   const [skinCheck, setSkinCheck] = useState(true);
   
   // Admin State
-  const [adminTab, setAdminTab] = useState('live'); // 'live', 'roster'
+  const [adminTab, setAdminTab] = useState('live'); // 'live', 'history', 'roster'
   const [newStudentName, setNewStudentName] = useState('');
   const [csvData, setCsvData] = useState('');
   const [importStatus, setImportStatus] = useState('');
   const [todaysAttendance, setTodaysAttendance] = useState<any[]>([]);
+  const [historyStats, setHistoryStats] = useState<any[]>([]);
+  
+  // Security State
+  const [rosterUnlocked, setRosterUnlocked] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
 
   // Load Roster Function
   const fetchRoster = async () => {
@@ -124,17 +129,48 @@ const App = () => {
     }
   };
 
+  // Fetch History (Simplified: Last 300 records to calculate trends)
+  const fetchHistory = async () => {
+    try {
+      const q = query(collection(db, "attendance"), orderBy("timestamp", "desc"), limit(300));
+      const querySnapshot = await getDocs(q);
+      
+      // Group by date
+      const stats: {[key: string]: number} = {};
+      querySnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const date = data.date;
+        if(date) {
+          stats[date] = (stats[date] || 0) + 1;
+        }
+      });
+
+      // Convert to array
+      const statsArray = Object.keys(stats).map(date => ({
+        date,
+        count: stats[date]
+      })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      setHistoryStats(statsArray);
+    } catch (err) {
+      console.error("Error fetching history:", err);
+    }
+  };
+
   // Initial Load
   useEffect(() => {
     fetchRoster();
   }, []);
 
-  // Fetch attendance when switching to admin view
+  // Fetch data when switching tabs
   useEffect(() => {
     if (view === 'admin') {
       fetchTodaysAttendance();
+      if (adminTab === 'history') {
+        fetchHistory();
+      }
     }
-  }, [view]);
+  }, [view, adminTab]);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
@@ -182,6 +218,16 @@ const App = () => {
     }
   };
 
+  const handleDeleteCheckIn = async (id: string, name: string) => {
+    if(!confirm(`Remove ${name} from today's attendance?`)) return;
+    try {
+      await deleteDoc(doc(db, "attendance", id));
+      fetchTodaysAttendance(); // Refresh list
+    } catch(e) {
+      alert("Error deleting record.");
+    }
+  };
+
   // --- DANGER: DELETE ALL ROSTER ---
   const handleDeleteAllRoster = async () => {
     if (!confirm("⚠️ WARNING: This will DELETE EVERY STUDENT in the roster.\n\nYou will have to reload the team from the button above.\n\nAre you absolutely sure?")) return;
@@ -191,7 +237,6 @@ const App = () => {
         const q = query(collection(db, "roster"));
         const snapshot = await getDocs(q);
         
-        // Batch delete in chunks of 500
         const batchSize = 500;
         const docs = snapshot.docs;
         
@@ -209,11 +254,19 @@ const App = () => {
     }
   };
 
-  // --- PRELOADED DATA UPLOADER (WITH DUPE PROTECTION) ---
+  const unlockRosterTools = () => {
+    if (passwordInput.toLowerCase() === 'bluejays') {
+      setRosterUnlocked(true);
+      setPasswordInput('');
+    } else {
+      alert('Incorrect Password');
+    }
+  };
+
+  // --- PRELOADED DATA UPLOADER ---
   const handlePreloadedImport = async () => {
     setImportStatus('Checking for duplicates...');
     try {
-        // 1. Get current roster to prevent duplicates
         const currentRosterSnapshot = await getDocs(collection(db, "roster"));
         const existingNames = new Set();
         currentRosterSnapshot.docs.forEach(doc => {
@@ -222,7 +275,6 @@ const App = () => {
             existingNames.add(key);
         });
 
-        // 2. Filter new list
         const newWrestlers = PRELOADED_ROSTER.filter(w => {
             const key = `${w.First_Name}-${w.Last_Name}`.toLowerCase().trim();
             return !existingNames.has(key);
@@ -240,10 +292,7 @@ const App = () => {
         const batch = writeBatch(db);
         newWrestlers.forEach(wrestler => {
             const docRef = doc(collection(db, "roster"));
-            batch.set(docRef, {
-                ...wrestler,
-                Status: 'Active'
-            });
+            batch.set(docRef, { ...wrestler, Status: 'Active' });
         });
         await batch.commit();
         setImportStatus(`Success! Added ${newWrestlers.length} wrestlers.`);
@@ -253,7 +302,61 @@ const App = () => {
     }
   };
 
-  // --- CSV PARSER & UPLOADER (WITH DUPE PROTECTION) ---
+  // --- DEDUPLICATION TOOL ---
+  const handleDeduplicate = async () => {
+    if (!confirm("This will scan based on FIRST NAME + LAST NAME + GRADE. If all 3 match, duplicates are deleted. Continue?")) return;
+    setImportStatus('Scanning for duplicates...');
+    
+    try {
+      const q = query(collection(db, "roster"));
+      const snapshot = await getDocs(q);
+      
+      const seen = new Set();
+      const duplicates: string[] = [];
+      
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const fName = (data.First_Name || data.firstname || data.firstName || '').toString().trim().toLowerCase();
+        const lName = (data.Last_Name || data.lastname || data.lastName || '').toString().trim().toLowerCase();
+        const grade = (data.Grade || data.grade || '').toString().trim();
+        
+        if (!fName && !lName) return;
+
+        const key = `${fName}|${lName}|${grade}`;
+        
+        if (seen.has(key)) {
+           duplicates.push(doc.id);
+        } else {
+           seen.add(key);
+        }
+      });
+
+      if (duplicates.length === 0) {
+        setImportStatus('No duplicates found.');
+        return;
+      }
+
+      setImportStatus(`Found ${duplicates.length} duplicates. Deleting...`);
+
+      const batchSize = 500;
+      for (let i = 0; i < duplicates.length; i += batchSize) {
+        const batch = writeBatch(db);
+        const chunk = duplicates.slice(i, i + batchSize);
+        chunk.forEach(id => {
+           batch.delete(doc(db, "roster", id));
+        });
+        await batch.commit();
+      }
+
+      setImportStatus(`Success! Cleaned up ${duplicates.length} duplicate entries.`);
+      fetchRoster();
+    } catch (e: any) {
+      console.error(e);
+      setImportStatus('Error cleaning up: ' + e.message);
+    }
+  };
+
+  // --- CSV PARSER ---
   const handleBulkImport = async () => {
     if (!csvData) return;
     setImportStatus('Parsing...');
@@ -264,7 +367,6 @@ const App = () => {
       return;
     }
     
-    // ... Header Parsing Logic ...
     const firstRow = rows[0];
     const separator = firstRow.includes('\t') ? '\t' : ',';
     
@@ -302,7 +404,6 @@ const App = () => {
       return obj;
     }).filter(w => w && w.Last_Name && w.First_Name); 
 
-    // --- DUPLICATE CHECK ---
     setImportStatus('Checking for duplicates...');
     try {
         const currentRosterSnapshot = await getDocs(collection(db, "roster"));
@@ -517,16 +618,22 @@ const App = () => {
             <div className="flex flex-col h-full animate-in fade-in">
               
               {/* Tabs */}
-              <div className="flex gap-2 mb-6 border-b border-gray-700 pb-2">
+              <div className="flex gap-2 mb-4 border-b border-gray-700 pb-2">
                 <button 
                   onClick={() => setAdminTab('live')}
-                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'live' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition-colors ${adminTab === 'live' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
                 >
                   Live Practice
                 </button>
                 <button 
+                  onClick={() => setAdminTab('history')}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition-colors ${adminTab === 'history' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+                >
+                  History
+                </button>
+                <button 
                   onClick={() => setAdminTab('roster')}
-                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'roster' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition-colors ${adminTab === 'roster' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
                 >
                   Roster Tools
                 </button>
@@ -562,13 +669,21 @@ const App = () => {
                                <Clock className="w-3 h-3" /> {record.time || '00:00'}
                              </div>
                            </div>
-                           <div className="text-right">
-                             <div className="font-mono text-blue-400 font-bold">{record.weight} lbs</div>
-                             {!record.skinCheckPass && (
-                               <div className="text-xs text-red-400 font-bold flex items-center justify-end gap-1">
-                                 <AlertCircle className="w-3 h-3" /> Skin Issue
-                               </div>
-                             )}
+                           <div className="text-right flex items-center gap-3">
+                             <div>
+                               <div className="font-mono text-blue-400 font-bold">{record.weight} lbs</div>
+                               {!record.skinCheckPass && (
+                                 <div className="text-xs text-red-400 font-bold flex items-center justify-end gap-1">
+                                   <AlertCircle className="w-3 h-3" /> Skin Issue
+                                 </div>
+                               )}
+                             </div>
+                             <button 
+                                onClick={() => handleDeleteCheckIn(record.id, record.name)}
+                                className="p-2 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded-full transition-colors"
+                             >
+                                <XCircle className="w-5 h-5" />
+                             </button>
                            </div>
                          </div>
                        ))}
@@ -591,93 +706,165 @@ const App = () => {
                 </div>
               )}
 
-              {/* ROSTER TAB */}
+              {/* HISTORY TAB */}
+              {adminTab === 'history' && (
+                <div className="space-y-4 overflow-y-auto pb-20">
+                   <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg flex items-center gap-3">
+                      <BarChart3 className="w-8 h-8 text-blue-400" />
+                      <div>
+                        <h4 className="text-blue-300 font-bold">Attendance History</h4>
+                        <p className="text-xs text-gray-400">Past practices sorted by date</p>
+                      </div>
+                   </div>
+
+                   <div className="bg-gray-700 rounded-xl border border-gray-600 overflow-hidden">
+                     <div className="divide-y divide-gray-600/50">
+                        {historyStats.length === 0 && <div className="p-6 text-center text-gray-500">No past history found.</div>}
+                        {historyStats.map((stat, idx) => (
+                          <div key={idx} className="p-4 flex justify-between items-center hover:bg-gray-600/30">
+                             <div className="flex items-center gap-3">
+                               <Calendar className="w-5 h-5 text-gray-500" />
+                               <span className="font-bold text-gray-200">{stat.date}</span>
+                             </div>
+                             <div className="flex items-center gap-2 bg-gray-800 px-3 py-1 rounded-lg border border-gray-600">
+                                <Users className="w-4 h-4 text-blue-400" />
+                                <span className="font-bold text-white">{stat.count}</span>
+                             </div>
+                          </div>
+                        ))}
+                     </div>
+                   </div>
+                </div>
+              )}
+
+              {/* ROSTER TAB (PROTECTED) */}
               {adminTab === 'roster' && (
                 <div className="space-y-6 overflow-y-auto pb-20">
                   
-                  {/* DANGER ZONE - CLEAR DB */}
-                  <div className="bg-red-900/10 border border-red-900/50 p-4 rounded-lg">
-                     <h4 className="text-red-400 font-bold mb-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4"/> Danger Zone</h4>
-                     <p className="text-xs text-gray-400 mb-3">
-                        Need to start over? This deletes EVERYONE from the roster.
-                     </p>
-                     <button
-                        onClick={handleDeleteAllRoster}
-                        className="w-full bg-red-900/50 hover:bg-red-900/80 text-white border border-red-800 text-sm py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2"
-                     >
-                        <Trash2 className="w-4 h-4"/> Delete Entire Roster
-                     </button>
-                  </div>
-
-                  {/* PRELOADED BUTTON */}
-                  <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg">
-                    <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
-                    <p className="text-xs text-gray-400 mb-3">
-                        Safe Load: Checks for duplicates before adding.
-                    </p>
-                    <button 
-                      onClick={handlePreloadedImport}
-                      className="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-900/50"
-                    >
-                      <UploadCloud className="w-4 h-4" /> Load Full Team Roster
-                    </button>
-                  </div>
-
-                  {/* Manual CSV Import */}
-                  <div className="bg-gray-700 rounded-lg p-4 border border-gray-600">
-                    <p className="text-xs text-gray-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
-                    <textarea 
-                      className="w-full bg-gray-800 border border-gray-600 text-xs text-gray-300 p-2 rounded h-24 font-mono"
-                      placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
-                      value={csvData}
-                      onChange={(e) => setCsvData(e.target.value)}
-                    />
-                    <button 
-                      onClick={handleBulkImport}
-                      className="mt-2 w-full bg-gray-600 hover:bg-gray-500 text-white text-sm py-2 rounded flex items-center justify-center gap-2"
-                    >
-                      <UploadCloud className="w-4 h-4" /> Process Import
-                    </button>
-                    {importStatus && (
-                      <div className="mt-2 text-xs text-blue-400 font-mono">
-                        {importStatus}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Manual Add Single */}
-                  <div className="mt-6">
-                    <h4 className="text-gray-500 text-xs font-bold uppercase mb-2">Quick Add Single</h4>
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        placeholder="Lastname, Firstname"
-                        className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm w-full text-white"
-                        value={newStudentName}
-                        onChange={(e) => setNewStudentName(e.target.value)}
-                      />
-                      <button 
-                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg"
-                        onClick={async () => {
-                          if(newStudentName) {
-                            try {
-                              const parts = newStudentName.split(',');
-                              const lastName = parts[0].trim();
-                              const firstName = parts[1] ? parts[1].trim() : '';
-                              await addDoc(collection(db, "roster"), { Last_Name: lastName, First_Name: firstName, Status: 'Active' });
-                              setNewStudentName('');
-                              fetchRoster();
-                              alert('Added!');
-                            } catch (e: any) {
-                              alert('Error adding student: ' + e.message);
-                            }
-                          }
-                        }}
-                      >
-                        <UserPlus className="w-4 h-4" />
-                      </button>
+                  {!rosterUnlocked ? (
+                    <div className="bg-gray-700 border border-gray-600 p-8 rounded-xl text-center">
+                       <Lock className="w-12 h-12 text-gray-500 mx-auto mb-4" />
+                       <h3 className="text-white font-bold mb-4">Locked Area</h3>
+                       <p className="text-gray-400 text-sm mb-4">Enter coach password to access roster tools.</p>
+                       <form onSubmit={(e) => { e.preventDefault(); unlockRosterTools(); }}>
+                         <input 
+                           type="password" 
+                           className="bg-gray-800 border border-gray-500 text-white px-4 py-2 rounded-lg w-full mb-3 text-center"
+                           placeholder="Password"
+                           value={passwordInput}
+                           onChange={(e) => setPasswordInput(e.target.value)}
+                         />
+                         <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-lg">
+                           Unlock
+                         </button>
+                       </form>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="animate-in fade-in slide-in-from-bottom-2">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-green-400 font-bold flex items-center gap-2"><Unlock className="w-4 h-4"/> Roster Tools Unlocked</h3>
+                        <button onClick={() => setRosterUnlocked(false)} className="text-xs text-gray-500 hover:text-white">Lock</button>
+                      </div>
+
+                      {/* DANGER ZONE - CLEAR DB */}
+                      <div className="bg-red-900/10 border border-red-900/50 p-4 rounded-lg mb-6">
+                        <h4 className="text-red-400 font-bold mb-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4"/> Danger Zone</h4>
+                        <p className="text-xs text-gray-400 mb-3">
+                            Need to start over? This deletes EVERYONE from the roster.
+                        </p>
+                        <button
+                            onClick={handleDeleteAllRoster}
+                            className="w-full bg-red-900/50 hover:bg-red-900/80 text-white border border-red-800 text-sm py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2"
+                        >
+                            <Trash2 className="w-4 h-4"/> Delete Entire Roster
+                        </button>
+                      </div>
+
+                      {/* PRELOADED BUTTON */}
+                      <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg mb-6">
+                        <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
+                        <p className="text-xs text-gray-400 mb-3">
+                            Safe Load: Checks for duplicates before adding.
+                        </p>
+                        <button 
+                          onClick={handlePreloadedImport}
+                          className="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-900/50"
+                        >
+                          <UploadCloud className="w-4 h-4" /> Load Full Team Roster
+                        </button>
+                      </div>
+
+                      {/* MAINTENANCE / CLEANUP TOOLS */}
+                      <div className="bg-orange-900/10 border border-orange-900/50 p-4 rounded-lg mb-6">
+                        <h4 className="text-orange-400 font-bold mb-2 flex items-center gap-2"><Trash2 className="w-4 h-4"/> Maintenance</h4>
+                        <p className="text-xs text-gray-400 mb-3">
+                            Duplicate entries? Click below to keep one of each student and delete the extras.
+                        </p>
+                        <button
+                            onClick={handleDeduplicate}
+                            className="w-full bg-orange-900/30 hover:bg-orange-900/50 text-orange-300 border border-orange-800 text-sm py-2 rounded-lg font-bold transition-all"
+                        >
+                            Fix Duplicate Roster Entries
+                        </button>
+                      </div>
+
+                      {/* Manual CSV Import */}
+                      <div className="bg-gray-700 rounded-lg p-4 border border-gray-600 mb-6">
+                        <p className="text-xs text-gray-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
+                        <textarea 
+                          className="w-full bg-gray-800 border border-gray-600 text-xs text-gray-300 p-2 rounded h-24 font-mono"
+                          placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
+                          value={csvData}
+                          onChange={(e) => setCsvData(e.target.value)}
+                        />
+                        <button 
+                          onClick={handleBulkImport}
+                          className="mt-2 w-full bg-gray-600 hover:bg-gray-500 text-white text-sm py-2 rounded flex items-center justify-center gap-2"
+                        >
+                          <UploadCloud className="w-4 h-4" /> Process Import
+                        </button>
+                        {importStatus && (
+                          <div className="mt-2 text-xs text-blue-400 font-mono">
+                            {importStatus}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Manual Add Single */}
+                      <div className="mt-6">
+                        <h4 className="text-gray-500 text-xs font-bold uppercase mb-2">Quick Add Single</h4>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            placeholder="Lastname, Firstname"
+                            className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm w-full text-white"
+                            value={newStudentName}
+                            onChange={(e) => setNewStudentName(e.target.value)}
+                          />
+                          <button 
+                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg"
+                            onClick={async () => {
+                              if(newStudentName) {
+                                try {
+                                  const parts = newStudentName.split(',');
+                                  const lastName = parts[0].trim();
+                                  const firstName = parts[1] ? parts[1].trim() : '';
+                                  await addDoc(collection(db, "roster"), { Last_Name: lastName, First_Name: firstName, Status: 'Active' });
+                                  setNewStudentName('');
+                                  fetchRoster();
+                                  alert('Added!');
+                                } catch (e: any) {
+                                  alert('Error adding student: ' + e.message);
+                                }
+                              }
+                            }}
+                          >
+                            <UserPlus className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
