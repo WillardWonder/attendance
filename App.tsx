@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc, where } from 'firebase/firestore';
-import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard } from 'lucide-react';
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc, where, deleteDoc } from 'firebase/firestore';
+import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard, Trash2 } from 'lucide-react';
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -209,6 +209,56 @@ const App = () => {
     }
   };
 
+  // --- DEDUPLICATION TOOL ---
+  const handleDeduplicate = async () => {
+    if (!confirm("This will scan the roster for duplicate names and DELETE the extras. Are you sure?")) return;
+    setImportStatus('Scanning for duplicates...');
+    
+    try {
+      const q = query(collection(db, "roster"));
+      const snapshot = await getDocs(q);
+      
+      const seen = new Set();
+      const duplicates: string[] = [];
+      
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        // Create unique key based on First+Last Name
+        const key = `${data.First_Name}-${data.Last_Name}`.toLowerCase().trim();
+        
+        if (seen.has(key)) {
+           duplicates.push(doc.id);
+        } else {
+           seen.add(key);
+        }
+      });
+
+      if (duplicates.length === 0) {
+        setImportStatus('No duplicates found.');
+        return;
+      }
+
+      setImportStatus(`Found ${duplicates.length} duplicates. Deleting...`);
+
+      // Delete in batches of 500 (Firestore limit)
+      const batchSize = 500;
+      for (let i = 0; i < duplicates.length; i += batchSize) {
+        const batch = writeBatch(db);
+        const chunk = duplicates.slice(i, i + batchSize);
+        chunk.forEach(id => {
+           batch.delete(doc(db, "roster", id));
+        });
+        await batch.commit();
+      }
+
+      setImportStatus(`Success! Cleaned up ${duplicates.length} duplicate entries.`);
+      fetchRoster();
+    } catch (e: any) {
+      console.error(e);
+      setImportStatus('Error cleaning up: ' + e.message);
+    }
+  };
+
   // --- CSV PARSER & UPLOADER ---
   const handleBulkImport = async () => {
     if (!csvData) return;
@@ -287,13 +337,13 @@ const App = () => {
   // --- RENDER SUCCESS SCREEN ---
   if (view === 'success') {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        <div className="bg-slate-800 p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-slate-700">
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+        <div className="bg-gray-800 p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-gray-700">
           <div className="mx-auto bg-green-500/20 w-20 h-20 rounded-full flex items-center justify-center mb-6">
             <CheckCircle className="w-10 h-10 text-green-400" />
           </div>
           <h2 className="text-3xl font-bold text-white mb-2">Checked In!</h2>
-          <p className="text-slate-400 mb-8">Go start your warmup.</p>
+          <p className="text-gray-400 mb-8">Go start your warmup.</p>
           <button 
             onClick={() => setView('checkin')}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all"
@@ -307,7 +357,7 @@ const App = () => {
 
   // --- RENDER CHECK-IN FORM ---
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-blue-500 selection:text-white">
+    <div className="min-h-screen bg-gray-900 text-gray-200 font-sans selection:bg-blue-500 selection:text-white">
       <div className="max-w-md mx-auto min-h-screen flex flex-col">
         
         {/* Header */}
@@ -316,49 +366,49 @@ const App = () => {
             <h1 className="text-3xl font-extrabold text-white tracking-tight">
               Wrestling<span className="text-blue-500">Tracker</span>
             </h1>
-            <p className="text-slate-500 mt-2">Daily Practice Check-in</p>
+            <p className="text-gray-500 mt-2">Daily Practice Check-in</p>
           </div>
           {view === 'admin' && (
              <div className="text-right">
-               <div className="text-xs font-mono text-slate-500">{new Date().toLocaleDateString()}</div>
+               <div className="text-xs font-mono text-gray-500">{new Date().toLocaleDateString()}</div>
                <div className="text-xs font-bold text-blue-400">Coach Mode</div>
              </div>
           )}
         </div>
 
         {/* Main Card */}
-        <div className="flex-1 bg-slate-900 rounded-t-3xl p-6 shadow-2xl border-t border-slate-800 overflow-hidden flex flex-col">
+        <div className="flex-1 bg-gray-800 rounded-t-3xl p-6 shadow-2xl border-t border-gray-700 overflow-hidden flex flex-col">
           
           {view === 'checkin' && (
             <form onSubmit={handleSubmit} className="space-y-6">
             
             {/* Name Search */}
             <div className="relative">
-              <label className="block text-sm font-medium text-slate-400 mb-2">Find Your Name</label>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Find Your Name</label>
               <div className="relative">
-                <Search className="absolute left-4 top-4 text-slate-500 w-5 h-5" />
+                <Search className="absolute left-4 top-4 text-gray-500 w-5 h-5" />
                 <input
                   type="text"
                   value={searchTerm}
                   onChange={handleSearch}
                   placeholder="Start typing..."
-                  className="w-full bg-slate-800 border border-slate-700 text-white pl-12 pr-4 py-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all text-lg"
+                  className="w-full bg-gray-700 border border-gray-600 text-white pl-12 pr-4 py-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all text-lg"
                 />
               </div>
 
               {/* Autocomplete Dropdown */}
               {searchTerm && !selectedStudent && (
-                <div className="absolute z-10 w-full bg-slate-800 border border-slate-700 mt-2 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
+                <div className="absolute z-10 w-full bg-gray-700 border border-gray-600 mt-2 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
                   {filteredRoster.length > 0 ? (
                     filteredRoster.map(student => (
                       <div
                         key={student.id}
                         onClick={() => selectStudent(student)}
-                        className="p-4 hover:bg-blue-600/20 cursor-pointer border-b border-slate-700/50 last:border-0 flex justify-between items-center group"
+                        className="p-4 hover:bg-blue-600/20 cursor-pointer border-b border-gray-600/50 last:border-0 flex justify-between items-center group"
                       >
                         <div className="flex-1">
                           <span className="font-medium group-hover:text-blue-400 transition-colors block text-lg">{student.name}</span>
-                          <div className="flex gap-2 text-xs text-slate-500 mt-1">
+                          <div className="flex gap-2 text-xs text-gray-400 mt-1">
                             {student.grade && <span>Gr: {student.grade}</span>}
                           </div>
                           {student.needsDocs === 'Yes' && (
@@ -370,7 +420,7 @@ const App = () => {
                       </div>
                     ))
                   ) : (
-                    <div className="p-4 text-slate-500 text-center">
+                    <div className="p-4 text-gray-500 text-center">
                       {roster.length === 0 ? "Loading Roster..." : "No wrestler found"}
                     </div>
                   )}
@@ -387,36 +437,36 @@ const App = () => {
 
             {/* Weight Input */}
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-2">Current Weight (lbs)</label>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Current Weight (lbs)</label>
               <div className="relative">
-                <Scale className="absolute left-4 top-4 text-slate-500 w-5 h-5" />
+                <Scale className="absolute left-4 top-4 text-gray-500 w-5 h-5" />
                 <input
                   type="number"
                   step="0.1"
                   value={weight}
                   onChange={(e) => setWeight(e.target.value)}
                   placeholder="0.0"
-                  className="w-full bg-slate-800 border border-slate-700 text-white pl-12 pr-4 py-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none text-xl font-mono"
+                  className="w-full bg-gray-700 border border-gray-600 text-white pl-12 pr-4 py-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none text-xl font-mono"
                 />
               </div>
             </div>
 
             {/* Skin Check Toggle */}
-            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+            <div className="bg-gray-700/50 p-4 rounded-xl border border-gray-600/50">
               <div className="flex items-center justify-between">
-                <span className="text-slate-300 font-medium">Skin Check Clear?</span>
+                <span className="text-gray-300 font-medium">Skin Check Clear?</span>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setSkinCheck(true)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${skinCheck ? 'bg-green-500/20 text-green-400 border border-green-500/50' : 'bg-slate-800 text-slate-500'}`}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${skinCheck ? 'bg-green-500/20 text-green-400 border border-green-500/50' : 'bg-gray-700 text-gray-500'}`}
                   >
                     Yes
                   </button>
                   <button
                     type="button"
                     onClick={() => setSkinCheck(false)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${!skinCheck ? 'bg-red-500/20 text-red-400 border border-red-500/50' : 'bg-slate-800 text-slate-500'}`}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${!skinCheck ? 'bg-red-500/20 text-red-400 border border-red-500/50' : 'bg-gray-700 text-gray-500'}`}
                   >
                     No
                   </button>
@@ -438,7 +488,7 @@ const App = () => {
               disabled={loading}
               className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg shadow-blue-900/20 transition-all ${
                 loading 
-                ? 'bg-slate-700 text-slate-400 cursor-wait' 
+                ? 'bg-gray-600 text-gray-400 cursor-wait' 
                 : 'bg-blue-600 hover:bg-blue-500 text-white hover:shadow-blue-500/20 hover:-translate-y-1'
               }`}
             >
@@ -452,16 +502,16 @@ const App = () => {
             <div className="flex flex-col h-full animate-in fade-in">
               
               {/* Tabs */}
-              <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
+              <div className="flex gap-2 mb-6 border-b border-gray-700 pb-2">
                 <button 
                   onClick={() => setAdminTab('live')}
-                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'live' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'live' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
                 >
                   Live Practice
                 </button>
                 <button 
                   onClick={() => setAdminTab('roster')}
-                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'roster' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'roster' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
                 >
                   Roster Tools
                 </button>
@@ -472,28 +522,28 @@ const App = () => {
                 <div className="space-y-4 overflow-y-auto pb-20">
                   {/* Stats Cards */}
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                      <div className="text-slate-400 text-xs uppercase font-bold mb-1">Present</div>
+                    <div className="bg-gray-700 p-4 rounded-xl border border-gray-600">
+                      <div className="text-gray-400 text-xs uppercase font-bold mb-1">Present</div>
                       <div className="text-3xl font-bold text-green-400">{todaysAttendance.length}</div>
                     </div>
-                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                      <div className="text-slate-400 text-xs uppercase font-bold mb-1">Absent</div>
+                    <div className="bg-gray-700 p-4 rounded-xl border border-gray-600">
+                      <div className="text-gray-400 text-xs uppercase font-bold mb-1">Absent</div>
                       <div className="text-3xl font-bold text-red-400">{getAbsentStudents().length}</div>
                     </div>
                   </div>
 
                   {/* List Container */}
-                  <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                     <div className="p-3 bg-slate-900/50 border-b border-slate-700 font-bold text-slate-300 flex items-center gap-2">
+                  <div className="bg-gray-700 rounded-xl border border-gray-600 overflow-hidden">
+                     <div className="p-3 bg-gray-800/50 border-b border-gray-600 font-bold text-gray-300 flex items-center gap-2">
                        <UserCheck className="w-4 h-4 text-green-400" /> Checked In
                      </div>
-                     <div className="divide-y divide-slate-700/50">
-                       {todaysAttendance.length === 0 && <div className="p-4 text-slate-500 text-sm text-center">No check-ins yet today.</div>}
+                     <div className="divide-y divide-gray-600/50">
+                       {todaysAttendance.length === 0 && <div className="p-4 text-gray-500 text-sm text-center">No check-ins yet today.</div>}
                        {todaysAttendance.map(record => (
-                         <div key={record.id} className="p-3 flex justify-between items-center hover:bg-slate-700/30">
+                         <div key={record.id} className="p-3 flex justify-between items-center hover:bg-gray-600/30">
                            <div>
-                             <div className="font-bold text-slate-200">{record.name}</div>
-                             <div className="text-xs text-slate-500 flex items-center gap-2">
+                             <div className="font-bold text-gray-200">{record.name}</div>
+                             <div className="text-xs text-gray-500 flex items-center gap-2">
                                <Clock className="w-3 h-3" /> {record.time || '00:00'}
                              </div>
                            </div>
@@ -510,15 +560,15 @@ const App = () => {
                      </div>
                   </div>
 
-                  <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                     <div className="p-3 bg-slate-900/50 border-b border-slate-700 font-bold text-slate-300 flex items-center gap-2">
+                  <div className="bg-gray-700 rounded-xl border border-gray-600 overflow-hidden">
+                     <div className="p-3 bg-gray-800/50 border-b border-gray-600 font-bold text-gray-300 flex items-center gap-2">
                        <UserX className="w-4 h-4 text-red-400" /> Absent
                      </div>
-                     <div className="divide-y divide-slate-700/50 max-h-60 overflow-y-auto">
+                     <div className="divide-y divide-gray-600/50 max-h-60 overflow-y-auto">
                         {getAbsentStudents().map(s => (
-                          <div key={s.id} className="p-3 text-sm text-slate-400 flex justify-between">
+                          <div key={s.id} className="p-3 text-sm text-gray-400 flex justify-between">
                             <span>{s.name}</span>
-                            <span className="text-slate-600 text-xs">{s.grade ? `Gr ${s.grade}` : ''}</span>
+                            <span className="text-gray-500 text-xs">{s.grade ? `Gr ${s.grade}` : ''}</span>
                           </div>
                         ))}
                      </div>
@@ -532,7 +582,7 @@ const App = () => {
                   {/* PRELOADED BUTTON */}
                   <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg">
                     <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
-                    <p className="text-xs text-slate-400 mb-3">
+                    <p className="text-xs text-gray-400 mb-3">
                         Click below to instantly load the 39 wrestlers from your spreadsheet.
                     </p>
                     <button 
@@ -543,18 +593,32 @@ const App = () => {
                     </button>
                   </div>
 
+                  {/* MAINTENANCE / CLEANUP TOOLS */}
+                  <div className="bg-red-900/10 border border-red-900/50 p-4 rounded-lg">
+                     <h4 className="text-red-400 font-bold mb-2 flex items-center gap-2"><Trash2 className="w-4 h-4"/> Maintenance</h4>
+                     <p className="text-xs text-gray-400 mb-3">
+                        Duplicate entries? Click below to keep one of each student and delete the extras.
+                     </p>
+                     <button
+                        onClick={handleDeduplicate}
+                        className="w-full bg-red-900/30 hover:bg-red-900/50 text-red-300 border border-red-800 text-sm py-2 rounded-lg font-bold transition-all"
+                     >
+                        Fix Duplicate Roster Entries
+                     </button>
+                  </div>
+
                   {/* Manual CSV Import */}
-                  <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                    <p className="text-xs text-slate-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
+                  <div className="bg-gray-700 rounded-lg p-4 border border-gray-600">
+                    <p className="text-xs text-gray-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
                     <textarea 
-                      className="w-full bg-slate-900 border border-slate-700 text-xs text-slate-300 p-2 rounded h-24 font-mono"
+                      className="w-full bg-gray-800 border border-gray-600 text-xs text-gray-300 p-2 rounded h-24 font-mono"
                       placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
                       value={csvData}
                       onChange={(e) => setCsvData(e.target.value)}
                     />
                     <button 
                       onClick={handleBulkImport}
-                      className="mt-2 w-full bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 rounded flex items-center justify-center gap-2"
+                      className="mt-2 w-full bg-gray-600 hover:bg-gray-500 text-white text-sm py-2 rounded flex items-center justify-center gap-2"
                     >
                       <UploadCloud className="w-4 h-4" /> Process Import
                     </button>
@@ -567,17 +631,17 @@ const App = () => {
 
                   {/* Manual Add Single */}
                   <div className="mt-6">
-                    <h4 className="text-slate-500 text-xs font-bold uppercase mb-2">Quick Add Single</h4>
+                    <h4 className="text-gray-500 text-xs font-bold uppercase mb-2">Quick Add Single</h4>
                     <div className="flex gap-2">
                       <input 
                         type="text" 
                         placeholder="Lastname, Firstname"
-                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-full text-white"
+                        className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm w-full text-white"
                         value={newStudentName}
                         onChange={(e) => setNewStudentName(e.target.value)}
                       />
                       <button 
-                        className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg"
+                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg"
                         onClick={async () => {
                           if(newStudentName) {
                             try {
@@ -604,8 +668,8 @@ const App = () => {
           )}
 
           {/* Footer / Admin Toggle */}
-          <div className="mt-auto pt-4 text-center border-t border-slate-800">
-             <button onClick={() => setView(view === 'admin' ? 'checkin' : 'admin')} className="text-slate-600 hover:text-blue-400 text-xs flex items-center justify-center gap-2 mx-auto uppercase font-bold tracking-wider">
+          <div className="mt-auto pt-4 text-center border-t border-gray-700">
+             <button onClick={() => setView(view === 'admin' ? 'checkin' : 'admin')} className="text-gray-600 hover:text-blue-400 text-xs flex items-center justify-center gap-2 mx-auto uppercase font-bold tracking-wider">
                <LayoutDashboard className="w-3 h-3" />
                {view === 'admin' ? 'Back to Student Check-in' : 'Coach Dashboard'}
              </button>
