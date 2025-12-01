@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc } from 'firebase/firestore';
-import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud } from 'lucide-react';
+import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users } from 'lucide-react';
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -17,6 +17,49 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+
+// --- PRELOADED DATA FROM YOUR SPREADSHEET ---
+const PRELOADED_ROSTER = [
+  { First_Name: 'Lakeyn', Last_Name: 'Adams', Grade: '10', Email: 'lakeyn.adams@mapsedu.org' },
+  { First_Name: 'Kullin', Last_Name: 'Amundson', Grade: '10', Email: 'kullin.amundson@mapsedu.org' },
+  { First_Name: 'James', Last_Name: 'Barker', Grade: '10', Email: 'James.barker@mapsedu.org' },
+  { First_Name: 'Wyatt', Last_Name: 'Boyd', Grade: '10', Email: 'wyatt.boyd@mapsedu.org' },
+  { First_Name: 'Zander', Last_Name: 'Brown-Grenwalt', Grade: '12', Email: 'Alexander.browngrenw@mapsedu.org' },
+  { First_Name: 'Xander', Last_Name: 'Carey', Grade: '11', Email: 'xander.carey@mapsedu.org' },
+  { First_Name: 'Jude', Last_Name: 'Charbarneau', Grade: '10', Email: 'jude.charbarneau@mapsedu.org' },
+  { First_Name: 'Noah', Last_Name: 'Clifford', Grade: '11', Email: 'noah.clifford@mapsedu.org' },
+  { First_Name: 'Ryan', Last_Name: 'Coates', Grade: '12', Email: 'ryan.coates@mapsedu.org' },
+  { First_Name: 'Wil', Last_Name: 'Detert', Grade: '9', Email: 'wil.detert@mapsedu.org' },
+  { First_Name: 'Marvin', Last_Name: 'Downs', Grade: '11', Email: 'marvin.downs@mapsedu.org' },
+  { First_Name: 'Tegan', Last_Name: 'Drake', Grade: '12', Email: 'tegan.drake@mapsedu.org' },
+  { First_Name: 'Ben', Last_Name: 'Gruett', Grade: '12', Email: 'benjamin.gruett@mapsedu.org' },
+  { First_Name: 'Josh', Last_Name: 'Gustum', Grade: '12', Email: 'joshgustum07@gmail.com' },
+  { First_Name: 'Collin', Last_Name: 'Hodgins', Grade: '11', Email: 'collin.hodgins@mapsedu.org' },
+  { First_Name: 'Bennett', Last_Name: 'Jacobson', Grade: '10', Email: 'bennett.jacobson@mapsedu.org' },
+  { First_Name: 'Trenton', Last_Name: 'Klimek', Grade: '11', Email: 'Trenton.klimek@mapsedu.org' },
+  { First_Name: 'Noah', Last_Name: 'Klug', Grade: '12', Email: 'noah.klug@mapsedu.org' },
+  { First_Name: 'Otto', Last_Name: 'Lee', Grade: '10', Email: 'osjlee@mapsedu.org' },
+  { First_Name: 'Eli', Last_Name: 'Lofink', Grade: '10', Email: 'eli.lofink@mapsedu.org' },
+  { First_Name: 'William', Last_Name: 'Miemietz', Grade: '11', Email: 'william.miemietz@mapsedu.org' },
+  { First_Name: 'Landon', Last_Name: 'Neumann', Grade: '12', Email: 'landon.neumann@mapsedu.org' },
+  { First_Name: 'Abram', Last_Name: 'Norton', Grade: '11', Email: 'abram.norton@mapsedu.org' },
+  { First_Name: 'Koi', Last_Name: 'Olson', Grade: '9', Email: 'koi.olson@mapsedu.org' },
+  { First_Name: 'Hunter', Last_Name: 'Opper', Grade: '12', Email: 'Hunter.opper@mapsedu.org' },
+  { First_Name: 'Cartter', Last_Name: 'Schade', Grade: '11', Email: 'cartter.schade@mapsedu.org' },
+  { First_Name: 'Mason', Last_Name: 'Schenk', Grade: '11', Email: 'mason.schenk@mapsedu.org' },
+  { First_Name: 'Dustin', Last_Name: 'Schmirler', Grade: '12', Email: 'dustin.schmirler@mapsedu.org' },
+  { First_Name: 'Preston', Last_Name: 'Schuelke', Grade: '12', Email: 'preston.schuelke@mapsedu.org' },
+  { First_Name: 'Easton', Last_Name: 'Simon', Grade: '10', Email: 'easton.simon@mapsedu.org' },
+  { First_Name: 'Remington', Last_Name: 'Skic', Grade: '11', Email: 'remington.skic@mapsedu.org' },
+  { First_Name: 'Marcus', Last_Name: 'Slagoski', Grade: '11', Email: 'Marcus.slagoski@mapsedu.org' },
+  { First_Name: 'Brett', Last_Name: 'Suchocki', Grade: '12', Email: 'brett.suchocki@gmail.com' },
+  { First_Name: 'Broc', Last_Name: 'Suchocki', Grade: '10', Email: 'Broc.suchocki@gmail.com' },
+  { First_Name: 'Aaron', Last_Name: 'Watson-Dye', Grade: '12', Email: 'aaron.watsondye@mapsedu.org' },
+  { First_Name: 'Evan', Last_Name: 'Winters', Grade: '10', Email: 'evan.winters@mapsedu.org' },
+  { First_Name: 'Liam', Last_Name: 'Huggins', Grade: '10', Email: 'liam.huggins@mapsedu.org' },
+  { First_Name: 'Alexander', Last_Name: 'Bushar', Grade: '10', Email: 'alexander.bushar@mapsedu.org' },
+  { First_Name: 'Ty', Last_Name: 'Schuett', Grade: '11', Email: 'ty.schuett@mapsedu.org' }
+];
 
 const App = () => {
   const [view, setView] = useState('checkin'); // 'checkin', 'admin', 'success'
@@ -118,60 +161,88 @@ const App = () => {
     }
   };
 
+  // --- PRELOADED DATA UPLOADER ---
+  const handlePreloadedImport = async () => {
+    if(!confirm("This will add " + PRELOADED_ROSTER.length + " wrestlers to the database. Continue?")) return;
+    
+    setImportStatus('Uploading full roster...');
+    try {
+        const batch = writeBatch(db);
+        PRELOADED_ROSTER.forEach(wrestler => {
+            const docRef = doc(collection(db, "roster"));
+            batch.set(docRef, {
+                ...wrestler,
+                Status: 'Active'
+            });
+        });
+        await batch.commit();
+        setImportStatus('Success! Full team loaded.');
+        fetchRoster(); // Refresh list
+    } catch (e: any) {
+        setImportStatus('Error uploading: ' + e.message);
+    }
+  };
+
   // --- CSV PARSER & UPLOADER ---
   const handleBulkImport = async () => {
     if (!csvData) return;
     setImportStatus('Parsing...');
     
-    // Simple CSV parser
     const rows = csvData.trim().split('\n');
+    if (rows.length < 2) {
+      setImportStatus('Error: No data rows found.');
+      return;
+    }
     
-    // 1. Get Headers
-    // We split by tab (\t) OR comma (,) to handle copy-paste from Excel/Sheets better
-    const separator = rows[0].includes('\t') ? '\t' : ',';
+    const firstRow = rows[0];
+    const separator = firstRow.includes('\t') ? '\t' : ',';
     
-    const headers = rows[0].split(separator).map(h => h.trim().replace(/^"|"$/g, ''));
-    
-    console.log("Detected headers:", headers);
+    const normalizeHeader = (h: string) => {
+        const clean = h.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (['lastname', 'last_name', 'last'].includes(clean)) return 'Last_Name';
+        if (['firstname', 'first_name', 'first'].includes(clean)) return 'First_Name';
+        if (['email', 'emailaddress'].includes(clean)) return 'Email';
+        if (['grade', 'year'].includes(clean)) return 'Grade';
+        if (['status', 'activitystatus'].includes(clean)) return 'Status';
+        return h.trim().replace(/^"|"$/g, ''); 
+    };
 
-    // Check for critical headers (Case sensitive matching to your sheet)
+    const originalHeaders = firstRow.split(separator).map(h => h.trim());
+    const headers = originalHeaders.map(normalizeHeader);
+    
     if (!headers.includes('Last_Name') || !headers.includes('First_Name')) {
-      setImportStatus('Error: Missing "Last_Name" or "First_Name" columns.');
+      setImportStatus(`Error: Missing Name columns.`);
       return;
     }
 
     const newWrestlers = rows.slice(1).map(row => {
-      // Handle empty rows
       if (!row.trim()) return null;
-
       const values = row.split(separator);
       const obj: any = {};
-      
       headers.forEach((header, index) => {
         let val = values[index]?.trim();
-        // Remove quotes if present
         if (val && val.startsWith('"') && val.endsWith('"')) {
             val = val.slice(1, -1);
         }
-        obj[header] = val;
+        if (header) {
+            obj[header] = val;
+        }
       });
       return obj;
     }).filter(w => w && w.Last_Name && w.First_Name); 
 
     setImportStatus(`Uploading ${newWrestlers.length} wrestlers...`);
 
-    // Batch Upload
     try {
         const batch = writeBatch(db);
         newWrestlers.forEach(wrestler => {
             const docRef = doc(collection(db, "roster"));
-            // We save the entire object, which includes Email, DOB, Notes, etc.
             batch.set(docRef, wrestler);
         });
         await batch.commit();
-        setImportStatus('Success! Database updated.');
+        setImportStatus(`Success! Added ${newWrestlers.length} wrestlers.`);
         setCsvData('');
-        fetchRoster(); // Refresh list
+        fetchRoster();
     } catch (e: any) {
         setImportStatus('Error uploading: ' + e.message);
     }
@@ -355,19 +426,30 @@ const App = () => {
              </button>
           </div>
           
-          {/* ADMIN AREA: BULK UPLOAD */}
+          {/* ADMIN AREA */}
           {view === 'admin' && (
             <div className="mt-6 border-t border-slate-800 pt-6 animate-in fade-in slide-in-from-bottom-4">
               <h3 className="text-white font-bold mb-4 flex items-center gap-2">
                 <ClipboardList className="w-4 h-4 text-blue-500"/> Roster Management
               </h3>
               
-              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <p className="text-xs text-slate-400 mb-2">
-                  1. Copy your spreadsheet.<br/>
-                  2. Required headers: <code>Last_Name, First_Name</code><br/>
-                  3. We also support: <code>Email, Grade, Status, Notes, Need documents completed</code>
+              {/* PRELOADED BUTTON */}
+              <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg mb-6">
+                <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
+                <p className="text-xs text-slate-400 mb-3">
+                    Click below to instantly load the 39 wrestlers from your spreadsheet into the database.
                 </p>
+                <button 
+                  onClick={handlePreloadedImport}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-900/50"
+                >
+                  <UploadCloud className="w-4 h-4" /> Load Full Team Roster
+                </button>
+              </div>
+
+              {/* Manual CSV Import */}
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                 <p className="text-xs text-slate-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
                 <textarea 
                   className="w-full bg-slate-900 border border-slate-700 text-xs text-slate-300 p-2 rounded h-24 font-mono"
                   placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
