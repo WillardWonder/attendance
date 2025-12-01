@@ -87,17 +87,18 @@ const App = () => {
       
       const loadedRoster = querySnapshot.docs.map(doc => {
         const data = doc.data();
-        const fName = data.First_Name || '';
-        const lName = data.Last_Name || '';
+        // Robust check for field names (case insensitive fallback)
+        const fName = data.First_Name || data.firstname || data.firstName || '';
+        const lName = data.Last_Name || data.lastname || data.lastName || '';
         
         return {
           id: doc.id,
           // Construct Display Name: "Doe, John"
           name: lName && fName ? `${lName}, ${fName}` : (lName || fName || 'Unknown'),
           // Store other fields for reference
-          grade: data.Grade || '',
-          email: data.Email || '',
-          status: data.Status || '',
+          grade: data.Grade || data.grade || '',
+          email: data.Email || data.email || '',
+          status: data.Status || data.status || '',
           needsDocs: data['Need documents completed'] || '',
           ...data
         };
@@ -209,9 +210,9 @@ const App = () => {
     }
   };
 
-  // --- DEDUPLICATION TOOL ---
+  // --- DEDUPLICATION TOOL (STRICT 3-VALUE MATCH) ---
   const handleDeduplicate = async () => {
-    if (!confirm("This will scan the roster for duplicate names and DELETE the extras. Are you sure?")) return;
+    if (!confirm("This will scan based on FIRST NAME + LAST NAME + GRADE. If all 3 match, duplicates are deleted. Continue?")) return;
     setImportStatus('Scanning for duplicates...');
     
     try {
@@ -223,8 +224,16 @@ const App = () => {
       
       snapshot.docs.forEach(doc => {
         const data = doc.data();
-        // Create unique key based on First+Last Name
-        const key = `${data.First_Name}-${data.Last_Name}`.toLowerCase().trim();
+        // Robust field retrieval to handle casing differences
+        const fName = (data.First_Name || data.firstname || data.firstName || '').toString().trim().toLowerCase();
+        const lName = (data.Last_Name || data.lastname || data.lastName || '').toString().trim().toLowerCase();
+        const grade = (data.Grade || data.grade || '').toString().trim();
+        
+        // Skip records that are totally empty
+        if (!fName && !lName) return;
+
+        // Unique Fingerprint: Name + Grade (3 values total)
+        const key = `${fName}|${lName}|${grade}`;
         
         if (seen.has(key)) {
            duplicates.push(doc.id);
