@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc } from 'firebase/firestore';
-import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users } from 'lucide-react';
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc, where } from 'firebase/firestore';
+import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard } from 'lucide-react';
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -73,9 +73,11 @@ const App = () => {
   const [skinCheck, setSkinCheck] = useState(true);
   
   // Admin State
+  const [adminTab, setAdminTab] = useState('live'); // 'live', 'roster'
   const [newStudentName, setNewStudentName] = useState('');
   const [csvData, setCsvData] = useState('');
   const [importStatus, setImportStatus] = useState('');
+  const [todaysAttendance, setTodaysAttendance] = useState<any[]>([]);
 
   // Load Roster Function
   const fetchRoster = async () => {
@@ -108,10 +110,33 @@ const App = () => {
     }
   };
 
+  // Fetch Today's Attendance
+  const fetchTodaysAttendance = async () => {
+    try {
+      const today = new Date().toLocaleDateString();
+      const q = query(collection(db, "attendance"), where("date", "==", today));
+      const querySnapshot = await getDocs(q);
+      const attendance = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setTodaysAttendance(attendance);
+    } catch (err) {
+      console.error("Error fetching attendance:", err);
+    }
+  };
+
   // Initial Load
   useEffect(() => {
     fetchRoster();
   }, []);
+
+  // Fetch attendance when switching to admin view
+  useEffect(() => {
+    if (view === 'admin') {
+      fetchTodaysAttendance();
+    }
+  }, [view]);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
@@ -141,7 +166,8 @@ const App = () => {
       skinCheckPass: skinCheck,
       notes: notes,
       timestamp: new Date().toISOString(),
-      date: new Date().toLocaleDateString()
+      date: new Date().toLocaleDateString(),
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     try {
@@ -252,6 +278,12 @@ const App = () => {
     student.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // --- HELPERS FOR DASHBOARD ---
+  const getAbsentStudents = () => {
+    const presentIds = new Set(todaysAttendance.map(a => a.studentId));
+    return roster.filter(student => !presentIds.has(student.id));
+  };
+
   // --- RENDER SUCCESS SCREEN ---
   if (view === 'success') {
     return (
@@ -279,17 +311,26 @@ const App = () => {
       <div className="max-w-md mx-auto min-h-screen flex flex-col">
         
         {/* Header */}
-        <div className="p-6 pt-12">
-          <h1 className="text-3xl font-extrabold text-white tracking-tight">
-            Wrestling<span className="text-blue-500">Tracker</span>
-          </h1>
-          <p className="text-slate-500 mt-2">Daily Practice Check-in</p>
+        <div className="p-6 pt-12 flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-extrabold text-white tracking-tight">
+              Wrestling<span className="text-blue-500">Tracker</span>
+            </h1>
+            <p className="text-slate-500 mt-2">Daily Practice Check-in</p>
+          </div>
+          {view === 'admin' && (
+             <div className="text-right">
+               <div className="text-xs font-mono text-slate-500">{new Date().toLocaleDateString()}</div>
+               <div className="text-xs font-bold text-blue-400">Coach Mode</div>
+             </div>
+          )}
         </div>
 
         {/* Main Card */}
-        <div className="flex-1 bg-slate-900 rounded-t-3xl p-6 shadow-2xl border-t border-slate-800">
+        <div className="flex-1 bg-slate-900 rounded-t-3xl p-6 shadow-2xl border-t border-slate-800 overflow-hidden flex flex-col">
           
-          <form onSubmit={handleSubmit} className="space-y-6">
+          {view === 'checkin' && (
+            <form onSubmit={handleSubmit} className="space-y-6">
             
             {/* Name Search */}
             <div className="relative">
@@ -319,23 +360,10 @@ const App = () => {
                           <span className="font-medium group-hover:text-blue-400 transition-colors block text-lg">{student.name}</span>
                           <div className="flex gap-2 text-xs text-slate-500 mt-1">
                             {student.grade && <span>Gr: {student.grade}</span>}
-                            {student.email && <span>• {student.email.split('@')[0]}</span>}
                           </div>
-                          {/* Alert for missing docs */}
                           {student.needsDocs === 'Yes' && (
                              <span className="text-red-400 text-xs font-bold flex items-center gap-1 mt-1">
                                <AlertCircle className="w-3 h-3"/> Missing Docs
-                             </span>
-                          )}
-                        </div>
-                        
-                        {/* Status Badge */}
-                        <div className="text-right">
-                          {student.Status === 'Active' ? (
-                             <span className="text-xs bg-green-900/50 text-green-300 px-2 py-1 rounded border border-green-800">Active</span>
-                          ) : (
-                             <span className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">
-                               {student.Status || '---'}
                              </span>
                           )}
                         </div>
@@ -416,100 +444,172 @@ const App = () => {
             >
               {loading ? 'Logging...' : 'Check In'}
             </button>
+            </form>
+          )}
 
-          </form>
-
-          {/* Footer / Admin Link */}
-          <div className="mt-8 text-center">
-             <button onClick={() => setView(view === 'admin' ? 'checkin' : 'admin')} className="text-slate-700 text-xs hover:text-slate-500">
-               {view === 'admin' ? 'Back to Check-in' : 'Coach Admin Area'}
-             </button>
-          </div>
-          
-          {/* ADMIN AREA */}
+          {/* --- ADMIN DASHBOARD --- */}
           {view === 'admin' && (
-            <div className="mt-6 border-t border-slate-800 pt-6 animate-in fade-in slide-in-from-bottom-4">
-              <h3 className="text-white font-bold mb-4 flex items-center gap-2">
-                <ClipboardList className="w-4 h-4 text-blue-500"/> Roster Management
-              </h3>
+            <div className="flex flex-col h-full animate-in fade-in">
               
-              {/* PRELOADED BUTTON */}
-              <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg mb-6">
-                <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
-                <p className="text-xs text-slate-400 mb-3">
-                    Click below to instantly load the 39 wrestlers from your spreadsheet into the database.
-                </p>
+              {/* Tabs */}
+              <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
                 <button 
-                  onClick={handlePreloadedImport}
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-900/50"
+                  onClick={() => setAdminTab('live')}
+                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'live' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
                 >
-                  <UploadCloud className="w-4 h-4" /> Load Full Team Roster
+                  Live Practice
+                </button>
+                <button 
+                  onClick={() => setAdminTab('roster')}
+                  className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${adminTab === 'roster' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                >
+                  Roster Tools
                 </button>
               </div>
 
-              {/* Manual CSV Import */}
-              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                 <p className="text-xs text-slate-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
-                <textarea 
-                  className="w-full bg-slate-900 border border-slate-700 text-xs text-slate-300 p-2 rounded h-24 font-mono"
-                  placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
-                  value={csvData}
-                  onChange={(e) => setCsvData(e.target.value)}
-                />
-                <button 
-                  onClick={handleBulkImport}
-                  className="mt-2 w-full bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 rounded flex items-center justify-center gap-2"
-                >
-                  <UploadCloud className="w-4 h-4" /> Process Import
-                </button>
-                {importStatus && (
-                  <div className="mt-2 text-xs text-blue-400 font-mono">
-                    {importStatus}
+              {/* LIVE TAB */}
+              {adminTab === 'live' && (
+                <div className="space-y-4 overflow-y-auto pb-20">
+                  {/* Stats Cards */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                      <div className="text-slate-400 text-xs uppercase font-bold mb-1">Present</div>
+                      <div className="text-3xl font-bold text-green-400">{todaysAttendance.length}</div>
+                    </div>
+                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                      <div className="text-slate-400 text-xs uppercase font-bold mb-1">Absent</div>
+                      <div className="text-3xl font-bold text-red-400">{getAbsentStudents().length}</div>
+                    </div>
                   </div>
-                )}
-              </div>
 
-              {/* Manual Add Single */}
-              <div className="mt-6">
-                <h4 className="text-slate-500 text-xs font-bold uppercase mb-2">Quick Add Single</h4>
-                <div className="flex gap-2">
-                  <input 
-                    type="text" 
-                    placeholder="Lastname, Firstname"
-                    className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-full text-white"
-                    value={newStudentName}
-                    onChange={(e) => setNewStudentName(e.target.value)}
-                  />
-                  <button 
-                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg"
-                    onClick={async () => {
-                       if(newStudentName) {
-                         try {
-                           const parts = newStudentName.split(',');
-                           const lastName = parts[0].trim();
-                           const firstName = parts[1] ? parts[1].trim() : '';
+                  {/* List Container */}
+                  <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                     <div className="p-3 bg-slate-900/50 border-b border-slate-700 font-bold text-slate-300 flex items-center gap-2">
+                       <UserCheck className="w-4 h-4 text-green-400" /> Checked In
+                     </div>
+                     <div className="divide-y divide-slate-700/50">
+                       {todaysAttendance.length === 0 && <div className="p-4 text-slate-500 text-sm text-center">No check-ins yet today.</div>}
+                       {todaysAttendance.map(record => (
+                         <div key={record.id} className="p-3 flex justify-between items-center hover:bg-slate-700/30">
+                           <div>
+                             <div className="font-bold text-slate-200">{record.name}</div>
+                             <div className="text-xs text-slate-500 flex items-center gap-2">
+                               <Clock className="w-3 h-3" /> {record.time || '00:00'}
+                             </div>
+                           </div>
+                           <div className="text-right">
+                             <div className="font-mono text-blue-400 font-bold">{record.weight} lbs</div>
+                             {!record.skinCheckPass && (
+                               <div className="text-xs text-red-400 font-bold flex items-center justify-end gap-1">
+                                 <AlertCircle className="w-3 h-3" /> Skin Issue
+                               </div>
+                             )}
+                           </div>
+                         </div>
+                       ))}
+                     </div>
+                  </div>
 
-                           await addDoc(collection(db, "roster"), { 
-                               Last_Name: lastName,
-                               First_Name: firstName,
-                               Status: 'Active'
-                           });
-                           
-                           setNewStudentName('');
-                           fetchRoster();
-                           alert('Added!');
-                         } catch (e: any) {
-                           alert('Error adding student: ' + e.message);
-                         }
-                       }
-                    }}
-                  >
-                    <UserPlus className="w-4 h-4" />
-                  </button>
+                  <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                     <div className="p-3 bg-slate-900/50 border-b border-slate-700 font-bold text-slate-300 flex items-center gap-2">
+                       <UserX className="w-4 h-4 text-red-400" /> Absent
+                     </div>
+                     <div className="divide-y divide-slate-700/50 max-h-60 overflow-y-auto">
+                        {getAbsentStudents().map(s => (
+                          <div key={s.id} className="p-3 text-sm text-slate-400 flex justify-between">
+                            <span>{s.name}</span>
+                            <span className="text-slate-600 text-xs">{s.grade ? `Gr ${s.grade}` : ''}</span>
+                          </div>
+                        ))}
+                     </div>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* ROSTER TAB */}
+              {adminTab === 'roster' && (
+                <div className="space-y-6 overflow-y-auto pb-20">
+                  {/* PRELOADED BUTTON */}
+                  <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg">
+                    <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
+                    <p className="text-xs text-slate-400 mb-3">
+                        Click below to instantly load the 39 wrestlers from your spreadsheet.
+                    </p>
+                    <button 
+                      onClick={handlePreloadedImport}
+                      className="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-900/50"
+                    >
+                      <UploadCloud className="w-4 h-4" /> Load Full Team Roster
+                    </button>
+                  </div>
+
+                  {/* Manual CSV Import */}
+                  <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <p className="text-xs text-slate-500 mb-2 font-bold uppercase">Manual Import (Optional)</p>
+                    <textarea 
+                      className="w-full bg-slate-900 border border-slate-700 text-xs text-slate-300 p-2 rounded h-24 font-mono"
+                      placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
+                      value={csvData}
+                      onChange={(e) => setCsvData(e.target.value)}
+                    />
+                    <button 
+                      onClick={handleBulkImport}
+                      className="mt-2 w-full bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 rounded flex items-center justify-center gap-2"
+                    >
+                      <UploadCloud className="w-4 h-4" /> Process Import
+                    </button>
+                    {importStatus && (
+                      <div className="mt-2 text-xs text-blue-400 font-mono">
+                        {importStatus}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Manual Add Single */}
+                  <div className="mt-6">
+                    <h4 className="text-slate-500 text-xs font-bold uppercase mb-2">Quick Add Single</h4>
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        placeholder="Lastname, Firstname"
+                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-full text-white"
+                        value={newStudentName}
+                        onChange={(e) => setNewStudentName(e.target.value)}
+                      />
+                      <button 
+                        className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg"
+                        onClick={async () => {
+                          if(newStudentName) {
+                            try {
+                              const parts = newStudentName.split(',');
+                              const lastName = parts[0].trim();
+                              const firstName = parts[1] ? parts[1].trim() : '';
+                              await addDoc(collection(db, "roster"), { Last_Name: lastName, First_Name: firstName, Status: 'Active' });
+                              setNewStudentName('');
+                              fetchRoster();
+                              alert('Added!');
+                            } catch (e: any) {
+                              alert('Error adding student: ' + e.message);
+                            }
+                          }
+                        }}
+                      >
+                        <UserPlus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
+
+          {/* Footer / Admin Toggle */}
+          <div className="mt-auto pt-4 text-center border-t border-slate-800">
+             <button onClick={() => setView(view === 'admin' ? 'checkin' : 'admin')} className="text-slate-600 hover:text-blue-400 text-xs flex items-center justify-center gap-2 mx-auto uppercase font-bold tracking-wider">
+               <LayoutDashboard className="w-3 h-3" />
+               {view === 'admin' ? 'Back to Student Check-in' : 'Coach Dashboard'}
+             </button>
+          </div>
 
         </div>
       </div>
