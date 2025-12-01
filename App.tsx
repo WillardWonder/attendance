@@ -47,8 +47,13 @@ const App = () => {
         
         return {
           id: doc.id,
+          // Construct Display Name: "Doe, John"
           name: lName && fName ? `${lName}, ${fName}` : (lName || fName || 'Unknown'),
-          weightClass: data.Weight_Class, 
+          // Store other fields for reference
+          grade: data.Grade || '',
+          email: data.Email || '',
+          status: data.Status || '',
+          needsDocs: data['Need documents completed'] || '',
           ...data
         };
       });
@@ -83,9 +88,12 @@ const App = () => {
     }
 
     setLoading(true);
+    
+    // Data to save to "attendance" collection
     const data = {
       studentId: selectedStudent.id,
       name: selectedStudent.name,
+      grade: selectedStudent.grade, // Capture grade in attendance record
       weight: parseFloat(weight),
       skinCheckPass: skinCheck,
       notes: notes,
@@ -96,6 +104,7 @@ const App = () => {
     try {
       await addDoc(collection(db, "attendance"), data);
       setView('success');
+      // Reset form
       setWeight('');
       setNotes('');
       setSearchTerm('');
@@ -116,27 +125,38 @@ const App = () => {
     
     // Simple CSV parser
     const rows = csvData.trim().split('\n');
-    const headers = rows[0].split(',').map(h => h.trim());
     
-    // Check for required headers
+    // 1. Get Headers
+    // We split by tab (\t) OR comma (,) to handle copy-paste from Excel/Sheets better
+    const separator = rows[0].includes('\t') ? '\t' : ',';
+    
+    const headers = rows[0].split(separator).map(h => h.trim().replace(/^"|"$/g, ''));
+    
+    console.log("Detected headers:", headers);
+
+    // Check for critical headers (Case sensitive matching to your sheet)
     if (!headers.includes('Last_Name') || !headers.includes('First_Name')) {
-      setImportStatus('Error: CSV must have "Last_Name" and "First_Name" headers.');
+      setImportStatus('Error: Missing "Last_Name" or "First_Name" columns.');
       return;
     }
 
     const newWrestlers = rows.slice(1).map(row => {
-      const values = row.split(',');
+      // Handle empty rows
+      if (!row.trim()) return null;
+
+      const values = row.split(separator);
       const obj: any = {};
+      
       headers.forEach((header, index) => {
-        // Remove quotes if present
         let val = values[index]?.trim();
+        // Remove quotes if present
         if (val && val.startsWith('"') && val.endsWith('"')) {
             val = val.slice(1, -1);
         }
         obj[header] = val;
       });
       return obj;
-    }).filter(w => w.Last_Name && w.First_Name); // Basic validation
+    }).filter(w => w && w.Last_Name && w.First_Name); 
 
     setImportStatus(`Uploading ${newWrestlers.length} wrestlers...`);
 
@@ -145,10 +165,11 @@ const App = () => {
         const batch = writeBatch(db);
         newWrestlers.forEach(wrestler => {
             const docRef = doc(collection(db, "roster"));
+            // We save the entire object, which includes Email, DOB, Notes, etc.
             batch.set(docRef, wrestler);
         });
         await batch.commit();
-        setImportStatus('Success! Roster updated.');
+        setImportStatus('Success! Database updated.');
         setCsvData('');
         fetchRoster(); // Refresh list
     } catch (e: any) {
@@ -223,10 +244,30 @@ const App = () => {
                         onClick={() => selectStudent(student)}
                         className="p-4 hover:bg-blue-600/20 cursor-pointer border-b border-slate-700/50 last:border-0 flex justify-between items-center group"
                       >
-                        <span className="font-medium group-hover:text-blue-400 transition-colors">{student.name}</span>
-                        <span className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">
-                          {student.weightClass || '---'} lbs
-                        </span>
+                        <div className="flex-1">
+                          <span className="font-medium group-hover:text-blue-400 transition-colors block text-lg">{student.name}</span>
+                          <div className="flex gap-2 text-xs text-slate-500 mt-1">
+                            {student.grade && <span>Gr: {student.grade}</span>}
+                            {student.email && <span>• {student.email.split('@')[0]}</span>}
+                          </div>
+                          {/* Alert for missing docs */}
+                          {student.needsDocs === 'Yes' && (
+                             <span className="text-red-400 text-xs font-bold flex items-center gap-1 mt-1">
+                               <AlertCircle className="w-3 h-3"/> Missing Docs
+                             </span>
+                          )}
+                        </div>
+                        
+                        {/* Status Badge */}
+                        <div className="text-right">
+                          {student.Status === 'Active' ? (
+                             <span className="text-xs bg-green-900/50 text-green-300 px-2 py-1 rounded border border-green-800">Active</span>
+                          ) : (
+                             <span className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">
+                               {student.Status || '---'}
+                             </span>
+                          )}
+                        </div>
                       </div>
                     ))
                   ) : (
@@ -323,14 +364,13 @@ const App = () => {
               
               <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
                 <p className="text-xs text-slate-400 mb-2">
-                  1. Open your Spreadsheet.<br/>
-                  2. Ensure columns are named: <code>Last_Name, First_Name, Weight_Class</code><br/>
-                  3. Select all cells and Copy.<br/>
-                  4. Paste below.
+                  1. Copy your spreadsheet.<br/>
+                  2. Required headers: <code>Last_Name, First_Name</code><br/>
+                  3. We also support: <code>Email, Grade, Status, Notes, Need documents completed</code>
                 </p>
                 <textarea 
                   className="w-full bg-slate-900 border border-slate-700 text-xs text-slate-300 p-2 rounded h-24 font-mono"
-                  placeholder={`Last_Name, First_Name, Weight_Class\nDoe, John, 145\nSmith, Jane, 120`}
+                  placeholder={`Email,Last_Name,First_Name,Grade,Status\njdoe@school.edu,Doe,John,10,Active`}
                   value={csvData}
                   onChange={(e) => setCsvData(e.target.value)}
                 />
@@ -370,7 +410,7 @@ const App = () => {
                            await addDoc(collection(db, "roster"), { 
                                Last_Name: lastName,
                                First_Name: firstName,
-                               Weight_Class: '',
+                               Status: 'Active'
                            });
                            
                            setNewStudentName('');
