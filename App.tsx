@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, getDocs, query, orderBy, writeBatch, doc, where, deleteDoc } from 'firebase/firestore';
-import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard, Trash2 } from 'lucide-react';
+import { Search, CheckCircle, Scale, AlertCircle, UserPlus, ClipboardList, UploadCloud, Users, Calendar, Clock, UserCheck, UserX, LayoutDashboard, Trash2, AlertTriangle } from 'lucide-react';
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -87,15 +87,12 @@ const App = () => {
       
       const loadedRoster = querySnapshot.docs.map(doc => {
         const data = doc.data();
-        // Robust check for field names (case insensitive fallback)
         const fName = data.First_Name || data.firstname || data.firstName || '';
         const lName = data.Last_Name || data.lastname || data.lastName || '';
         
         return {
           id: doc.id,
-          // Construct Display Name: "Doe, John"
           name: lName && fName ? `${lName}, ${fName}` : (lName || fName || 'Unknown'),
-          // Store other fields for reference
           grade: data.Grade || data.grade || '',
           email: data.Email || data.email || '',
           status: data.Status || data.status || '',
@@ -157,12 +154,10 @@ const App = () => {
     }
 
     setLoading(true);
-    
-    // Data to save to "attendance" collection
     const data = {
       studentId: selectedStudent.id,
       name: selectedStudent.name,
-      grade: selectedStudent.grade, // Capture grade in attendance record
+      grade: selectedStudent.grade,
       weight: parseFloat(weight),
       skinCheckPass: skinCheck,
       notes: notes,
@@ -174,7 +169,6 @@ const App = () => {
     try {
       await addDoc(collection(db, "attendance"), data);
       setView('success');
-      // Reset form
       setWeight('');
       setNotes('');
       setSearchTerm('');
@@ -188,14 +182,63 @@ const App = () => {
     }
   };
 
-  // --- PRELOADED DATA UPLOADER ---
-  const handlePreloadedImport = async () => {
-    if(!confirm("This will add " + PRELOADED_ROSTER.length + " wrestlers to the database. Continue?")) return;
+  // --- DANGER: DELETE ALL ROSTER ---
+  const handleDeleteAllRoster = async () => {
+    if (!confirm("⚠️ WARNING: This will DELETE EVERY STUDENT in the roster.\n\nYou will have to reload the team from the button above.\n\nAre you absolutely sure?")) return;
     
-    setImportStatus('Uploading full roster...');
+    setImportStatus('Deleting entire roster...');
     try {
+        const q = query(collection(db, "roster"));
+        const snapshot = await getDocs(q);
+        
+        // Batch delete in chunks of 500
+        const batchSize = 500;
+        const docs = snapshot.docs;
+        
+        for (let i = 0; i < docs.length; i += batchSize) {
+            const batch = writeBatch(db);
+            const chunk = docs.slice(i, i + batchSize);
+            chunk.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+        }
+        
+        setImportStatus('Roster wiped clean.');
+        fetchRoster();
+    } catch (e: any) {
+        setImportStatus('Error deleting: ' + e.message);
+    }
+  };
+
+  // --- PRELOADED DATA UPLOADER (WITH DUPE PROTECTION) ---
+  const handlePreloadedImport = async () => {
+    setImportStatus('Checking for duplicates...');
+    try {
+        // 1. Get current roster to prevent duplicates
+        const currentRosterSnapshot = await getDocs(collection(db, "roster"));
+        const existingNames = new Set();
+        currentRosterSnapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const key = `${data.First_Name}-${data.Last_Name}`.toLowerCase().trim();
+            existingNames.add(key);
+        });
+
+        // 2. Filter new list
+        const newWrestlers = PRELOADED_ROSTER.filter(w => {
+            const key = `${w.First_Name}-${w.Last_Name}`.toLowerCase().trim();
+            return !existingNames.has(key);
+        });
+
+        if (newWrestlers.length === 0) {
+            setImportStatus('All wrestlers are already in the database. No changes made.');
+            return;
+        }
+
+        if(!confirm(`Found ${newWrestlers.length} missing wrestlers. Add them now? (Skipped ${PRELOADED_ROSTER.length - newWrestlers.length} duplicates)`)) return;
+
+        setImportStatus(`Adding ${newWrestlers.length} new wrestlers...`);
+        
         const batch = writeBatch(db);
-        PRELOADED_ROSTER.forEach(wrestler => {
+        newWrestlers.forEach(wrestler => {
             const docRef = doc(collection(db, "roster"));
             batch.set(docRef, {
                 ...wrestler,
@@ -203,72 +246,14 @@ const App = () => {
             });
         });
         await batch.commit();
-        setImportStatus('Success! Full team loaded.');
-        fetchRoster(); // Refresh list
+        setImportStatus(`Success! Added ${newWrestlers.length} wrestlers.`);
+        fetchRoster();
     } catch (e: any) {
         setImportStatus('Error uploading: ' + e.message);
     }
   };
 
-  // --- DEDUPLICATION TOOL (STRICT 3-VALUE MATCH) ---
-  const handleDeduplicate = async () => {
-    if (!confirm("This will scan based on FIRST NAME + LAST NAME + GRADE. If all 3 match, duplicates are deleted. Continue?")) return;
-    setImportStatus('Scanning for duplicates...');
-    
-    try {
-      const q = query(collection(db, "roster"));
-      const snapshot = await getDocs(q);
-      
-      const seen = new Set();
-      const duplicates: string[] = [];
-      
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        // Robust field retrieval to handle casing differences
-        const fName = (data.First_Name || data.firstname || data.firstName || '').toString().trim().toLowerCase();
-        const lName = (data.Last_Name || data.lastname || data.lastName || '').toString().trim().toLowerCase();
-        const grade = (data.Grade || data.grade || '').toString().trim();
-        
-        // Skip records that are totally empty
-        if (!fName && !lName) return;
-
-        // Unique Fingerprint: Name + Grade (3 values total)
-        const key = `${fName}|${lName}|${grade}`;
-        
-        if (seen.has(key)) {
-           duplicates.push(doc.id);
-        } else {
-           seen.add(key);
-        }
-      });
-
-      if (duplicates.length === 0) {
-        setImportStatus('No duplicates found.');
-        return;
-      }
-
-      setImportStatus(`Found ${duplicates.length} duplicates. Deleting...`);
-
-      // Delete in batches of 500 (Firestore limit)
-      const batchSize = 500;
-      for (let i = 0; i < duplicates.length; i += batchSize) {
-        const batch = writeBatch(db);
-        const chunk = duplicates.slice(i, i + batchSize);
-        chunk.forEach(id => {
-           batch.delete(doc(db, "roster", id));
-        });
-        await batch.commit();
-      }
-
-      setImportStatus(`Success! Cleaned up ${duplicates.length} duplicate entries.`);
-      fetchRoster();
-    } catch (e: any) {
-      console.error(e);
-      setImportStatus('Error cleaning up: ' + e.message);
-    }
-  };
-
-  // --- CSV PARSER & UPLOADER ---
+  // --- CSV PARSER & UPLOADER (WITH DUPE PROTECTION) ---
   const handleBulkImport = async () => {
     if (!csvData) return;
     setImportStatus('Parsing...');
@@ -279,6 +264,7 @@ const App = () => {
       return;
     }
     
+    // ... Header Parsing Logic ...
     const firstRow = rows[0];
     const separator = firstRow.includes('\t') ? '\t' : ',';
     
@@ -300,7 +286,7 @@ const App = () => {
       return;
     }
 
-    const newWrestlers = rows.slice(1).map(row => {
+    const csvWrestlers = rows.slice(1).map(row => {
       if (!row.trim()) return null;
       const values = row.split(separator);
       const obj: any = {};
@@ -316,16 +302,38 @@ const App = () => {
       return obj;
     }).filter(w => w && w.Last_Name && w.First_Name); 
 
-    setImportStatus(`Uploading ${newWrestlers.length} wrestlers...`);
-
+    // --- DUPLICATE CHECK ---
+    setImportStatus('Checking for duplicates...');
     try {
+        const currentRosterSnapshot = await getDocs(collection(db, "roster"));
+        const existingNames = new Set();
+        currentRosterSnapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const fName = (data.First_Name || data.firstname || '').toString().toLowerCase().trim();
+            const lName = (data.Last_Name || data.lastname || '').toString().toLowerCase().trim();
+            existingNames.add(`${fName}-${lName}`);
+        });
+
+        const newWrestlers = csvWrestlers.filter(w => {
+            const fName = (w.First_Name || '').toString().toLowerCase().trim();
+            const lName = (w.Last_Name || '').toString().toLowerCase().trim();
+            return !existingNames.has(`${fName}-${lName}`);
+        });
+
+        if (newWrestlers.length === 0) {
+            setImportStatus('All names in CSV already exist. No changes made.');
+            return;
+        }
+
+        setImportStatus(`Uploading ${newWrestlers.length} new wrestlers...`);
+
         const batch = writeBatch(db);
         newWrestlers.forEach(wrestler => {
             const docRef = doc(collection(db, "roster"));
             batch.set(docRef, wrestler);
         });
         await batch.commit();
-        setImportStatus(`Success! Added ${newWrestlers.length} wrestlers.`);
+        setImportStatus(`Success! Added ${newWrestlers.length} new wrestlers.`);
         setCsvData('');
         fetchRoster();
     } catch (e: any) {
@@ -337,13 +345,12 @@ const App = () => {
     student.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // --- HELPERS FOR DASHBOARD ---
   const getAbsentStudents = () => {
     const presentIds = new Set(todaysAttendance.map(a => a.studentId));
     return roster.filter(student => !presentIds.has(student.id));
   };
 
-  // --- RENDER SUCCESS SCREEN ---
+  // --- UI RENDER ---
   if (view === 'success') {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
@@ -364,7 +371,6 @@ const App = () => {
     );
   }
 
-  // --- RENDER CHECK-IN FORM ---
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans selection:bg-blue-500 selection:text-white">
       <div className="max-w-md mx-auto min-h-screen flex flex-col">
@@ -588,11 +594,26 @@ const App = () => {
               {/* ROSTER TAB */}
               {adminTab === 'roster' && (
                 <div className="space-y-6 overflow-y-auto pb-20">
+                  
+                  {/* DANGER ZONE - CLEAR DB */}
+                  <div className="bg-red-900/10 border border-red-900/50 p-4 rounded-lg">
+                     <h4 className="text-red-400 font-bold mb-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4"/> Danger Zone</h4>
+                     <p className="text-xs text-gray-400 mb-3">
+                        Need to start over? This deletes EVERYONE from the roster.
+                     </p>
+                     <button
+                        onClick={handleDeleteAllRoster}
+                        className="w-full bg-red-900/50 hover:bg-red-900/80 text-white border border-red-800 text-sm py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2"
+                     >
+                        <Trash2 className="w-4 h-4"/> Delete Entire Roster
+                     </button>
+                  </div>
+
                   {/* PRELOADED BUTTON */}
                   <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg">
                     <h4 className="text-blue-300 font-bold mb-2 flex items-center gap-2"><Users className="w-4 h-4"/> 2024-25 Team Roster</h4>
                     <p className="text-xs text-gray-400 mb-3">
-                        Click below to instantly load the 39 wrestlers from your spreadsheet.
+                        Safe Load: Checks for duplicates before adding.
                     </p>
                     <button 
                       onClick={handlePreloadedImport}
@@ -600,20 +621,6 @@ const App = () => {
                     >
                       <UploadCloud className="w-4 h-4" /> Load Full Team Roster
                     </button>
-                  </div>
-
-                  {/* MAINTENANCE / CLEANUP TOOLS */}
-                  <div className="bg-red-900/10 border border-red-900/50 p-4 rounded-lg">
-                     <h4 className="text-red-400 font-bold mb-2 flex items-center gap-2"><Trash2 className="w-4 h-4"/> Maintenance</h4>
-                     <p className="text-xs text-gray-400 mb-3">
-                        Duplicate entries? Click below to keep one of each student and delete the extras.
-                     </p>
-                     <button
-                        onClick={handleDeduplicate}
-                        className="w-full bg-red-900/30 hover:bg-red-900/50 text-red-300 border border-red-800 text-sm py-2 rounded-lg font-bold transition-all"
-                     >
-                        Fix Duplicate Roster Entries
-                     </button>
                   </div>
 
                   {/* Manual CSV Import */}
